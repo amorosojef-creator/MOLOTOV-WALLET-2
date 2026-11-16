@@ -1,0 +1,38 @@
+# Builds an UNSIGNED Molotov.ipa on a free GitHub macOS machine, for sideloading with Sideloadly/AltStore.
+# STANDALONE by default (API_URL unset => EXPO_PUBLIC_API_URL=local: runs fully on the phone, no server).
+# UNTESTED by the author (no macOS available when written). Runs on every push to main, or: Actions -> "Build unsigned iOS IPA" -> Run workflow.
+name: Build unsigned iOS IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Install app packages
+        working-directory: mobile
+        run: npm ci || npm install
+      - name: Generate native iOS project
+        working-directory: mobile
+        env:
+          APP_VARIANT: preview
+          EXPO_PUBLIC_API_URL: ${{ vars.API_URL || 'local' }}
+        run: npx expo prebuild --platform ios --no-install && cd ios && pod install
+      - name: Build without signing
+        working-directory: mobile/ios
+        env:
+          APP_VARIANT: preview
+          EXPO_PUBLIC_API_URL: ${{ vars.API_URL || 'local' }}
+        run: |
+          WS=$(ls -d *.xcworkspace | head -1); SCHEME="${WS%.xcworkspace}"
+          xcodebuild -workspace "$WS" -scheme "$SCHEME" -configuration Release -sdk iphoneos \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+          mkdir -p Payload && cp -R build/Build/Products/Release-iphoneos/*.app Payload/
+          zip -qry Molotov-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with: { name: Molotov-unsigned-ipa, path: mobile/ios/Molotov-unsigned.ipa }

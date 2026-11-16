@@ -1,0 +1,58 @@
+// Browser UI end-to-end: two real users through the real web build against a RUNNING backend.
+// Usage: node e2e/ui-e2e.cjs [webUrl]   (needs `playwright` resolvable; see docs/TESTING.md)
+const { chromium } = require('playwright');
+const base = process.argv[2] || 'http://localhost:8099';
+const shots = process.env.SHOTS || '/tmp/shots';
+require('fs').mkdirSync(shots, { recursive: true });
+const rnd = Math.random().toString(36).slice(2, 7);
+let failed = 0;
+const check = (n, ok) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${n}`); if (!ok) failed++; };
+(async () => {
+  const browser = await chromium.launch();
+  const mk = async () => { const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' }); const p = await ctx.newPage(); p.on('pageerror', (e) => { console.log('PAGEERROR', e.message); failed++; }); return p; };
+  const register = async (p, name, handle) => {
+    await p.goto(base); await p.getByText('Get Started').click();
+    await p.getByPlaceholder('Alex Morgan').fill(name);
+    await p.getByPlaceholder('you@example.com').fill(`${handle}@example.com`);
+    await p.getByPlaceholder('alexmorgan').fill(handle);
+    await p.getByPlaceholder('At least 10 characters').fill('correct horse battery');
+    await p.getByPlaceholder(/Needed to confirm/).fill('123456');
+    await p.getByText('Create Account', { exact: true }).last().click();
+    await p.getByText('Recent Transactions').waitFor({ timeout: 20000 }); await p.waitForTimeout(800);
+  };
+  const a = await mk(), b = await mk();
+  const ah = `alex${rnd}`, bh = `emma${rnd}`;
+  await register(a, 'Alex Morgan', ah); await register(b, 'Emma Carter', bh);
+  check('both users registered and reached dashboard', true);
+  await a.getByLabel('Add Funds').click(); await a.getByLabel('Test amount').fill('5000');
+  await a.getByText('Add ₱5,000.00').click(); await a.getByText('Recent Transactions').waitFor(); await a.waitForTimeout(1500);
+  await a.screenshot({ path: `${shots}/funded.png` });
+  await a.getByLabel('Send', { exact: true }).first().click();
+  await a.getByPlaceholder('@handle or scan a Molotov QR').fill(bh);
+  await a.getByText('Emma Carter').first().waitFor({ timeout: 8000 });
+  await a.getByPlaceholder('0.00').fill('1250.50'); await a.getByPlaceholder('Dinner').fill('Dinner');
+  await a.getByText('Continue', { exact: true }).click();
+  await a.getByPlaceholder('Enter your PIN to confirm').fill('123456');
+  await a.screenshot({ path: `${shots}/review.png` });
+  await a.getByText('Confirm Transfer').click();
+  await a.getByText('Payment Successful!').waitFor({ timeout: 10000 }); await a.waitForTimeout(1200);
+  await a.screenshot({ path: `${shots}/success.png` });
+  check('sender sees Payment Successful', true);
+  await a.getByText('View Receipt').click(); await a.getByText('Transfer Receipt').waitFor(); await a.waitForTimeout(600);
+  await a.screenshot({ path: `${shots}/receipt.png` });
+  await b.reload(); await b.getByText('Recent Transactions').waitFor({ timeout: 20000 }); await b.waitForTimeout(1500);
+  const bt = await b.locator('body').innerText();
+  check('recipient (second account) sees ₱1,250.50 from Alex', /1,250\.50/.test(bt) && /Alex Morgan/.test(bt));
+  await b.screenshot({ path: `${shots}/recipient.png` });
+  await a.goto(base); await a.getByText('Recent Transactions').waitFor({ timeout: 20000 }); await a.waitForTimeout(1500);
+  check('sender balance is ₱3,749.50 after reload (server is source of truth)', /3,749\.50/.test(await a.locator('body').innerText()));
+  await a.getByLabel('Activity').first().click(); await a.getByPlaceholder('Search name, handle, note or reference').fill('Dinner'); await a.waitForTimeout(900);
+  check('activity search finds the transfer', /Emma Carter/.test(await a.locator('body').innerText()));
+  await a.getByLabel('Scan QR').first().click();
+  await a.getByPlaceholder(/Paste QR text/).fill('00020101021126270015ph.example.test010400005204599953036085802PH');
+  await a.getByText('Use This Code').click(); await a.waitForTimeout(1500);
+  await a.screenshot({ path: `${shots}/qrph.png` });
+  check('QR Ph payload is inspected and shown as NOT executable', /not enabled|cannot|blocked|inspect/i.test(await a.locator('body').innerText()));
+  await browser.close();
+  console.log(failed ? `\n${failed} FAILED` : '\nALL UI CHECKS PASSED'); process.exit(failed ? 1 : 0);
+})().catch((e) => { console.error('E2E FAIL', e.message.split('\n')[0]); process.exit(1); });

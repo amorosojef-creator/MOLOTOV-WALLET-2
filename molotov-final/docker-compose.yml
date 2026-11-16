@@ -1,0 +1,10 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment: { POSTGRES_USER: molotov, POSTGRES_PASSWORD: molotov_dev_password, POSTGRES_DB: molotov }
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - molotov_pg:/var/lib/postgresql/data
+      - ./backend/scripts/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U molotov"], interval: 5s, timeout: 3s, retries: 10 }
+volumes: { molotov_pg: {} }
